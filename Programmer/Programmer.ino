@@ -1,4 +1,7 @@
 /*
+ * 
+ * this is a mod for the STM32 Nuceo-64 board.
+ * 
  Programmer.ino
 
  Programmer for flashing Nordic nRF24LE1 SOC RF chips using SPI interface from an Arduino.
@@ -75,14 +78,14 @@
  D07 (RXD)	12 P0.6		10 P0.4		15 P1.1
  D08 (PROG)	 5 PROG		 6 PROG		10 PROG
  D09 (RESET)	13 RESET	19 RESET	30 RESET
- D10 (FCSN,TXD)	11 P0.5		15 P1.1		22 P2.0
+ D10 (FCSN,TXD)	11 P0.5		15 P1.1  	22 P2.0
  D11 (FMOSI)	 9 P0.3		13 P0.7		19 P1.5
  D12 (FMISO)	10 P0.4		14 P1.0		20 P1.6
  D13 (FSCK)	 8 P0.2		11 P0.5 	16 P1.2
 
  */
 #include <SPI.h>
-#include <SoftwareSerial.h>
+//#include <SoftwareSerial.h>
 #define NRFTYPE 24
 
 
@@ -93,13 +96,33 @@
 
 // nRF24LE1 Serial port connections.  These will differ with the different chip
 // packages
-#define nRF24LE1_TXD   10   // nRF24LE1 UART/TXD
-#define nRF24LE1_RXD    7   // nRF24LE1 UART/RXD
 
+//#define nRF24LE1_TXD   7   // nRF24LE1 UART/TXD
+//#define nRF24LE1_RXD    10   // nRF24LE1 UART/RXD
+
+#define DEL 2 // delay
+#define delay_del() delay(DEL); // to slow down the STM NUCLEO
+#define _STM32_NUCLEO
+//#define _ARDUINO
+
+
+#ifdef _ARDUINO
+// for Arduino Due, use SoftwareSerial:
 SoftwareSerial nRF24LE1Serial(nRF24LE1_TXD, nRF24LE1_RXD);
-#define NRF24LE1_BAUD  19200
+SoftwareSerial nRF24LE1Serial(6, 7); // RX, TX
+#endif
 
-#define FLASH_TRIGGER   0x01    // Magic character to trigger uploading of flash
+//#define NRF24LE1_BAUD  38400
+//#define NRF24LE1_BAUD  9600 // 38400 might be too fast for SoftwareSerial.
+#define NRF24LE1_BAUD  19200 // 38400 might be too fast for SoftwareSerial.
+
+// for the ST Micro STM32 Nucleo L476RG microcontroller. Has multiple hardware UARTs.
+#fidef _STM32_NUCLEO
+#define nRF24LE1Serial Serial3
+#endif
+
+//#define FLASH_TRIGGER   0x01    // Magic character to trigger uploading of flash
+#define FLASH_TRIGGER   0x21    // Magic character to trigger uploading of flash, changed to '!' by MV to make debugging easier. Issues with the perl uploader.
 
 
 // SPI Flash operations commands
@@ -147,6 +170,7 @@ SoftwareSerial nRF24LE1Serial(nRF24LE1_TXD, nRF24LE1_RXD);
 #define HEX_REC_EOF                    -5
 
 char inputRecord[521]; // Buffer for line of encoded hex data
+long dataTotalSize = 0;
 
 typedef struct hexRecordStruct {
   byte   rec_data[256];
@@ -193,6 +217,8 @@ int ParseHexRecord(struct hexRecordStruct * record, char * inputRecord, int inpu
   }
 
   record->rec_data_len = ConvertHexASCIIByteToByte(inputRecord[1], inputRecord[2]);
+  dataTotalSize += record->rec_data_len;
+  Serial.println(record->rec_data_len);
   record->rec_address = word(ConvertHexASCIIByteToByte(inputRecord[3], inputRecord[4]), ConvertHexASCIIByteToByte(inputRecord[5], inputRecord[6]));
   record->rec_type = ConvertHexASCIIByteToByte(inputRecord[7], inputRecord[8]);
   record->rec_checksum = ConvertHexASCIIByteToByte(inputRecord[9 + (record->rec_data_len * 2)], inputRecord[9 + (record->rec_data_len * 2) + 1]);
@@ -217,28 +243,35 @@ int ParseHexRecord(struct hexRecordStruct * record, char * inputRecord, int inpu
 }
 
 void flash() {
-
   Serial.println("FLASH");
+#ifdef _ARDUINO
   // Initialise SPI
   SPI.setBitOrder(MSBFIRST);
   SPI.setDataMode(SPI_MODE0);
   SPI.setClockDivider(SPI_CLOCK_DIV4);
-
+  SPI.begin();
+#endif
+#ifdef _STM32_NUCLEO
+  SPI.beginTransaction(SPISettings(16000000, MSBFIRST, SPI_MODE0)); // new way of doing things. Also add delays since the STM32 is faster than the nRF24LE1.
+#endif
   // Initialise control pins
   pinMode(PROG, OUTPUT);
   digitalWrite(PROG, LOW);
+  delay_del();  // add delay
   pinMode(_RESET_, OUTPUT);
   digitalWrite(_RESET_, HIGH);
+  delay_del();
   pinMode(_FCSN_, OUTPUT);
   digitalWrite(_FCSN_, HIGH);
+  delay_del();
 
-  SPI.begin();
 
-  Serial.println("READY");
+  Serial.println("\nREADY");
   if (!Serial.find("GO ")) {
-    Serial.println("TIMEOUT");
+    Serial.println("TIMEOUT1");
     return;
   }
+  //Serial.println("Found GO!");
 
  // Read nupp and rdismb
  byte nupp = Serial.parseInt();
@@ -248,29 +281,40 @@ void flash() {
 
   // Put nRF24LE1 into programming mode
   digitalWrite(PROG, HIGH);
+  delay_del();
   digitalWrite(_RESET_, LOW);
   delay(10);
   digitalWrite(_RESET_, HIGH);
-
   delay(10);
 
   // Set InfoPage enable bit so all flash is erased
   digitalWrite(_FCSN_, LOW);
+  delay_del();
   SPI.transfer(RDSR);
   fsr = SPI.transfer(0x00);
   digitalWrite(_FCSN_, HIGH);
-
+  delay_del();
   digitalWrite(_FCSN_, LOW);
+  delay_del();
   SPI.transfer(WRSR);
   SPI.transfer(fsr | FSR_INFEN);
+//#ifdef _ARDUINO
   delay(1);
+//#endif
+//#ifdef _STM32_NUCLEO
+//  delay(10);
+//#endif
   digitalWrite(_FCSN_, HIGH);
+  delay_del();
 
   // Check InfoPage enable bit was set
   digitalWrite(_FCSN_, LOW);
+  delay_del();
   SPI.transfer(RDSR);
   fsr = SPI.transfer(0x00);
+  delay(2);
   digitalWrite(_FCSN_, HIGH);
+  delay_del();
 
   if (!(fsr & FSR_INFEN)) {
     Serial.println("INFOPAGE ENABLE FAILED");
@@ -280,6 +324,7 @@ void flash() {
   // Read InfoPage content so it can be restored after erasing flash
   Serial.println("SAVING INFOPAGE...");
   digitalWrite(_FCSN_, LOW);
+  delay_del();
   SPI.transfer(READ);
   SPI.transfer(0);
   SPI.transfer(0);
@@ -287,28 +332,35 @@ void flash() {
     infopage[index] = SPI.transfer(0x00);
   }
   digitalWrite(_FCSN_, HIGH);
+  delay_del();
 
   // Erase flash
   Serial.println("ERASING FLASH...");
   // Set flash write enable latch
   digitalWrite(_FCSN_, LOW);
+  delay_del();
   SPI.transfer(WREN);
   delay(1);
   digitalWrite(_FCSN_, HIGH);
+  delay_del();
 
   // Erase all flash pages
   digitalWrite(_FCSN_, LOW);
+  delay_del();
   SPI.transfer(ERASE_ALL);
   delay(1);
   digitalWrite(_FCSN_, HIGH);
+  delay_del();
 
   // Check flash is ready
   do {
     delay(60);
     digitalWrite(_FCSN_, LOW);
+    delay_del();
     SPI.transfer(RDSR);
     fsr = SPI.transfer(0x00);
     digitalWrite(_FCSN_, HIGH);
+    delay_del();
   }
   while (fsr & FSR_RDYN);
 
@@ -326,12 +378,15 @@ void flash() {
   Serial.println("RESTORING INFOPAGE....");
   // Set flash write enable latch
   digitalWrite(_FCSN_, LOW);
+  delay_del();
   SPI.transfer(WREN);
   delay(1);
   digitalWrite(_FCSN_, HIGH);
+  delay_del();
 
   // Write back InfoPage content
   digitalWrite(_FCSN_, LOW);
+  delay_del();
   SPI.transfer(PROGRAM);
   SPI.transfer(0);
   SPI.transfer(0);
@@ -340,20 +395,24 @@ void flash() {
   }
   delay(1);
   digitalWrite(_FCSN_, HIGH);
+  delay_del();
 
   // Check flash is ready
   do {
     delay(10);
     digitalWrite(_FCSN_, LOW);
+    delay_del();
     SPI.transfer(RDSR);
     fsr = SPI.transfer(0x00);
     digitalWrite(_FCSN_, HIGH);
+    delay_del();
   }
   while (fsr & FSR_RDYN);
 
   // Verify data that was written
   Serial.println("VERFIYING INFOPAGE....");
   digitalWrite(_FCSN_, LOW);
+  delay_del();
   SPI.transfer(READ);
   SPI.transfer(0);
   SPI.transfer(0);
@@ -371,32 +430,41 @@ void flash() {
     }
   }
   delay(1);
+  delay(2);
   digitalWrite(_FCSN_, HIGH);
+  delay_del();
 
   // Clear InfoPage enable bit so main flash block is programed
   digitalWrite(_FCSN_, LOW);
+  delay_del();
   SPI.transfer(RDSR);
   fsr = SPI.transfer(0x00);
   digitalWrite(_FCSN_, HIGH);
+  delay_del();
 
   digitalWrite(_FCSN_, LOW);
+  delay_del();
   SPI.transfer(WRSR);
   SPI.transfer(fsr & ~FSR_INFEN);
   delay(1);
   digitalWrite(_FCSN_, HIGH);
+  delay_del();
 
   // Check InfoPage enable bit was cleared
   digitalWrite(_FCSN_, LOW);
+  delay_del();
   SPI.transfer(RDSR);
   fsr = SPI.transfer(0x00);
   digitalWrite(_FCSN_, HIGH);
+  delay_del();
 
   if (fsr & FSR_INFEN) {
     Serial.println("INFOPAGE DISABLE FAILED");
     goto done;
   }
 
-
+  //reset total bytes written counter
+  dataTotalSize = 0;
   while(true){
     // Prompt perl script for data
     Serial.println("OK");
@@ -404,7 +472,7 @@ void flash() {
     numChars = Serial.readBytesUntil('\n', inputRecord, 512);
 
     if (numChars == 0) {
-      Serial.println("TIMEOUT");
+      Serial.println("TIMEOUT2");
       goto done;
     }
 
@@ -430,23 +498,28 @@ void flash() {
 
     // Set flash write enable latch
     digitalWrite(_FCSN_, LOW);
+    delay_del();
     SPI.transfer(WREN);
     delay(1);
     digitalWrite(_FCSN_, HIGH);
+    delay_del();
 
     // Check flash is ready
     do {
       delay(10);
       digitalWrite(_FCSN_, LOW);
+      delay_del();
       SPI.transfer(RDSR);
       fsr = SPI.transfer(0x00);
       digitalWrite(_FCSN_, HIGH);
-    }
+      delay_del();
+}
     while (fsr & FSR_RDYN);
 
     // Program flash
-    Serial.println("WRITING...");
+    //Serial.println("WRITING...");
     digitalWrite(_FCSN_, LOW);
+    delay_del();
     SPI.transfer(PROGRAM);
     SPI.transfer(highByte(hexRecord.rec_address));
     SPI.transfer(lowByte(hexRecord.rec_address));
@@ -455,21 +528,25 @@ void flash() {
     }
     delay(1);
     digitalWrite(_FCSN_, HIGH);
+    delay_del();
 
 
     // Wait for flash to write
     do {
-      delay(hexRecord.rec_data_len);  // Wait 1 millisecond per byte written
+      //delay(hexRecord.rec_data_len / 900);  // Wait 1 millisecond per byte written
       digitalWrite(_FCSN_, LOW);
+      delay_del();
       SPI.transfer(RDSR);
       fsr = SPI.transfer(0x00);
       digitalWrite(_FCSN_, HIGH);
+      delay_del();
     }
     while (fsr & FSR_RDYN);
 
     // Read back flash to verify
-    Serial.println("VERIFYING...");
+    //Serial.println("VERIFYING...");
     digitalWrite(_FCSN_, LOW);
+    delay_del();
     SPI.transfer(READ);
     SPI.transfer(highByte(hexRecord.rec_address));
     SPI.transfer(lowByte(hexRecord.rec_address));
@@ -483,71 +560,110 @@ void flash() {
         Serial.print(" ");
         Serial.println(hexRecord.rec_data[index]);
         digitalWrite(_FCSN_, HIGH);
+        delay_del();
         goto done;
       }
     }
     digitalWrite(_FCSN_, HIGH);
+    delay_del();
 
   }
 
 done:
   // Take nRF24LE1 out of programming mode
   digitalWrite(PROG, LOW);
+  delay_del();
   digitalWrite(_RESET_, LOW);
+  delay_del();
   delay(10);
   digitalWrite(_RESET_, HIGH);
+  delay_del();
 
   SPI.end();
 
+  Serial.print(dataTotalSize);Serial.println(" bytes written");
   Serial.println("DONE");
-
 }
 
 
 void setup() {
   // start serial port:
-  Serial.begin(57600);
+  //Serial.begin(19200);
+  Serial.begin(115200);
   Serial.setTimeout(30000);
-
+  Serial.write("hello, world\n");
   // Reset nRF24LE1
   pinMode(PROG, OUTPUT);
   digitalWrite(PROG, LOW);
+  delay_del();
   pinMode(_RESET_, OUTPUT);
   digitalWrite(_RESET_, HIGH);
+  delay_del();
   delay(10);
   digitalWrite(_RESET_, LOW);
   delay(10);
   digitalWrite(_RESET_, HIGH);
+  delay_del();
 
 
   nRF24LE1Serial.begin(NRF24LE1_BAUD);
+  return;
 
 
 }
 
 char serialBuffer;
-
+char a;
 void loop() {
+    //nRF24LE1Serial.begin(NRF24LE1_BAUD); // to restart it if the nRF has gone offline.
+    //delay(1000);
 
+  //if (!nRF24LE1Serial) nRF24LE1Serial.begin(NRF24LE1_BAUD); // to restart it if the nRF has gone offline.
+  //if (nRF24LE1Serial.isListening()) Serial.println("listening!");
+  //if (nRF24LE1Serial) {
+  //  Serial.println("on!"); //nRF24LE1Serial.begin(NRF24LE1_BAUD); // to restart it if the nRF has gone offline.
+  //} 
+  //else 
+  //{
+  //  Serial.println("off!");
+  //}
+/*
+    nRF24LE1Serial.stopListening();
+    nRF24LE1Serial.end();
+    delay(1000);
+    nRF24LE1Serial.begin(NRF24LE1_BAUD); // to restart it if the nRF has gone offline.
+  }
+*/
   if (nRF24LE1Serial.available() > 0) {
     // Pass through serial data receieved from the nRF24LE1
-    Serial.write(nRF24LE1Serial.read());
+    a = nRF24LE1Serial.read();
+    if (a=='t') {
+      //Serial.write("STAR!");
+      pinMode(LED_BUILTIN, OUTPUT);
+      digitalWrite(LED_BUILTIN, HIGH);   // turn the LED on (HIGH is the voltage level)
+      delay(100);
+      digitalWrite(LED_BUILTIN, LOW);   // turn the LED on (HIGH is the voltage level)  
+      delay(100);
+    }
+    Serial.write(a);
   }
 
   if (Serial.available() > 0) {
     serialBuffer = Serial.read();
+    Serial.write(serialBuffer);
+    //Serial.write('G');
+
     // Check if data received on USB serial port is the magic character to start flashing
     if (serialBuffer == FLASH_TRIGGER) {
-      nRF24LE1Serial.end();
+      nRF24LE1Serial.end(); // stop doing multiserial
       flash();
-      nRF24LE1Serial.begin(NRF24LE1_BAUD);
+      nRF24LE1Serial.begin(NRF24LE1_BAUD); // resume doing multiserial
     } else {
       // Otherwise pass through serial data received
       nRF24LE1Serial.write(serialBuffer);
     }
   }
 }
-
 
 
 

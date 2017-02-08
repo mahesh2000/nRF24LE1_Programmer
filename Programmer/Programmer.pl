@@ -6,6 +6,9 @@
 
 # Usage:
 #      programmer.pl <Hex file> <Arduino Serial Port> [NUPP] [RDISMB]
+#			 e.g.
+# 		 perl Programmer.pl test1.hex COM6
+#			 Either COMx or COMx: can be used (e.g. COM6 or COM6:)
 #
 #      NUPP - Number of write unprotected memory blocks (0 - 31) - 0xFF: All pages unprotected
 #      RDISMB - External read protect main memory block - 0x00 Protected, 0xFF Unprotected
@@ -15,6 +18,9 @@
 #      in the 16 topmost addresses of the flash memory (0x3FF0 - 0x3FFF).  How to set those bits
 #      is left as an exercise for the reader. (Hint: Hack the hex file to write in those addresses.
 #      You will also need to set an address offset for your code.)
+
+# Requires:
+#	ppm install Win32-SerialPort
 
 #  Copyright (c) 2014 Dean Cording
 #
@@ -38,6 +44,22 @@
 
 use strict;
 use warnings;
+use Win32::SerialPort;
+
+$|++; #flush all characters to console
+
+my $serial = Win32::SerialPort->new($ARGV[1]) or die "Cannot open $ARGV[1]: $!";
+#$serial->baudrate(38400);
+#$serial->baudrate(19200);
+#$serial->baudrate(57600);
+$serial->baudrate(115200);
+print "Setting serial: 8,N,1\n";
+$serial->databits(8);
+$serial->parity("none");
+$serial->stopbits(1);
+$serial->are_match("\n", "\r");
+$serial->write_settings;
+$serial->lookclear;
 
 my $nupp=0xff;
 my $rdismb=0xff;
@@ -62,52 +84,66 @@ if (defined($ARGV[3])) {
   }
 }
 
-
 if ( (@ARGV < 2) || (!defined($nupp)) || (!defined($rdismb))) {
   print "Usage: $0 <Hex.file> <Arduino Serial Port> [NUPP] [RDISMB]\n";
   exit;
 }
 
-# Serial port settings to suit Arduino
-system "stty -F $ARGV[1] 10:0:18b1:0:3:1c:7f:15:4:0:1:0:11:13:1a:0:12:f:17:16:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0";
-
-
 open(HEX, "<", $ARGV[0]) or die "Cannot open $ARGV[0]: $!";
-open(SERIAL, "+<", $ARGV[1]) or die "Cannot open $ARGV[1]: $!";
+
+print "opened\n";
 
 #Wait for Arduino reset
 sleep(3);
 
+print "wakey\n";
 #Send the flash trigger character
-print SERIAL "\x01";
+#$serial->write("\x01");
+$serial->write("\x21"); # ! character
+print "sent flash trigger\n";
+my $data = "";
+$serial->lookclear;           # empty buffer
 
-do {
-  while (!defined($_ = <SERIAL>)) {}
-  print;
-  chomp;
-} until /READY/;
-
-print SERIAL "GO $nupp $rdismb\n";
-
-while (1) {
-
-  while (!defined($_ = <SERIAL>)) {}
-
-  print;
-  chomp;
-
-  last if /READY/;
-
-  last if /DONE/;
-
-  if (/OK/) {
-    $_ = <HEX>;
-    print;
-    print SERIAL;
+while(1){
+  $data = $serial->lookfor();
+  if ($data)
+  {
+	 print "$data\n";
   }
+  if ($data eq "READY") { last; }
+  if ($data eq "TIMEOUT") { die; }
+}
+#print "I GOT HERE ************************";
+
+$serial->write("GO $nupp $rdismb\n");
+
+while(1){
+  $data = $serial->lookfor();
+  if ($data)
+  {
+	print "\.";
+	#print "$data\n";
+  }
+
+  if ($data =~ /written/) { 
+	print "$data\n";
+	}
+  
+  if ($data eq "DONE") { 
+		print $data;
+		last; }
+  if ($data eq "READY") { 
+		print $data;
+		last; }
+  if ($data eq "TIMEOUT") { 
+		print $data;
+		die; }
+  if ($data eq "OK") {
+	$_ = <HEX>;
+    #print;
+    $serial->write($_);
+	}
 }
 
 close(HEX);
-close(SERIAL);
-
-
+$serial->close;
