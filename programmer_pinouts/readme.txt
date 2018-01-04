@@ -1,0 +1,2 @@
+These images show the pinouts for connecting two different nRF24LE1 boards to an Arduino for programming. An STMicro STM32 can be used for programming too.
+Note that the Arduino codebase has changed sufficiently that the code in the original branch may not work properly. Contact me should you need the updated code. It has been tested with the STM32, so you may need to make a few changes to get it to work with an Arduino. At a minimum, pinouts will need minor changing.
